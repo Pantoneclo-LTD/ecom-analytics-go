@@ -13,7 +13,6 @@ import (
 
 	"ecom-analytics-go/internal/models"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -53,7 +52,7 @@ func (h *AffiliateHandler) TrackClick(w http.ResponseWriter, r *http.Request) {
 		// return // Skip for now
 	}
 
-	click.ID = uuid.New()
+	click.ID = uint64(time.Now().UnixNano())
 	click.CreatedAt = time.Now()
 
 	query := `

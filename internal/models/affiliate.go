@@ -2,12 +2,10 @@ package models
 
 import (
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type AffiliateClick struct {
-	ID                  uuid.UUID  `json:"id" clickhouse:"id"`
+	ID                  uint64     `json:"id" clickhouse:"id"`
 	AffiliateID         uint64     `json:"affiliate_id" clickhouse:"affiliate_id"`
 	AffiliateDiscountID *uint64    `json:"affiliate_discount_id" clickhouse:"affiliate_discount_id"`
 	SessionID           string     `json:"session_id" clickhouse:"session_id"`

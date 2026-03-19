@@ -10,8 +10,8 @@ import (
 
 	"ecom-analytics-go/internal/db"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	_ "github.com/lib/pq"
 	"github.com/joho/godotenv"
 )
 
@@ -44,6 +44,9 @@ func main() {
 
 	if *clean {
 		cleanClickHouse(ctx, chConn, *table)
+		if err := db.InitSchema(chConn); err != nil {
+			log.Fatalf("Failed to recreate schema: %v", err)
+		}
 	}
 
 	if *table == "all" || *table == "audit_logs" {
@@ -71,7 +74,7 @@ func cleanClickHouse(ctx context.Context, chConn driver.Conn, table string) {
 
 	for _, t := range tables {
 		log.Printf("Cleaning ClickHouse table: %s", t)
-		if err := chConn.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", t)); err != nil {
+		if err := chConn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", t)); err != nil {
 			log.Printf("Failed to clean table %s: %v", t, err)
 		}
 	}
@@ -118,11 +121,19 @@ func migrateTable(ctx context.Context, pgDB *sqlx.DB, chConn driver.Conn, tableN
 		}
 
 		// Pre-process details (JSONB)
+		// Safe mapping for details (prevent double-encoding)
 		if details, ok := dest["details"]; ok && details != nil {
-			detailsJSON, _ := json.Marshal(details)
-			dest["details_str"] = string(detailsJSON)
+			switch v := details.(type) {
+			case string:
+				dest["details_str"] = v
+			case []byte:
+				dest["details_str"] = string(v)
+			default:
+				detailsJSON, _ := json.Marshal(details)
+				dest["details_str"] = string(detailsJSON)
+			}
 		} else {
-			dest["details_str"] = ""
+			dest["details_str"] = nil
 		}
 
 		batch = append(batch, dest)
@@ -161,7 +172,7 @@ func flushAuditLogs(ctx context.Context, chConn driver.Conn, batch []map[string]
 	}
 	for _, row := range batch {
 		err := batchInsert.Append(
-			uuid.New(),
+			getUint64(row["id"]),
 			getUint64(row["user_id"]),
 			getStringPtr(row["username"]),
 			getString(row["email"]),
@@ -185,7 +196,7 @@ func flushUserAuditLogs(ctx context.Context, chConn driver.Conn, batch []map[str
 	}
 	for _, row := range batch {
 		err := batchInsert.Append(
-			uuid.New(),
+			getUint64(row["id"]),
 			getUint64Ptr(row["user_id"]),
 			getUint64Ptr(row["cart_id"]),
 			getStringPtr(row["cart_uuid"]),
@@ -216,7 +227,7 @@ func flushAffiliateClicks(ctx context.Context, chConn driver.Conn, batch []map[s
 			}
 		}
 		err := batchInsert.Append(
-			uuid.New(),
+			getUint64(row["id"]),
 			getUint64(row["affiliate_id"]),
 			getUint64Ptr(row["affiliate_discount_id"]),
 			getString(row["session_id"]),

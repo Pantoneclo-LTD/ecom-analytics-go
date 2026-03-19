@@ -10,7 +10,6 @@ import (
 
 	"ecom-analytics-go/internal/models"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/google/uuid"
 )
 
 type LogsHandler struct {
@@ -29,7 +28,7 @@ func (h *LogsHandler) CreateSystemLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logItem.ID = uuid.New()
+	logItem.ID = uint64(time.Now().UnixNano())
 	if logItem.CreatedAt.IsZero() {
 		logItem.CreatedAt = time.Now()
 	}
@@ -149,7 +148,7 @@ func (h *LogsHandler) CreateUserLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logItem.ID = uuid.New()
+	logItem.ID = uint64(time.Now().UnixNano())
 	if logItem.CreatedAt.IsZero() {
 		logItem.CreatedAt = time.Now()
 	}

@@ -56,7 +56,7 @@ func InitSchema(conn driver.Conn) error {
 	// System Audit Logs
 	query1 := `
 	CREATE TABLE IF NOT EXISTS audit_logs (
-		id UUID,
+		id UInt64,
 		user_id UInt64,
 		username Nullable(String),
 		email String,
@@ -68,7 +68,7 @@ func InitSchema(conn driver.Conn) error {
 		role String,
 		created_at DateTime64(3, 'UTC')
 	) ENGINE = MergeTree()
-	ORDER BY (created_at, action)
+	ORDER BY (created_at, action, id)
 	`
 	if err := conn.Exec(ctx, query1); err != nil {
 		return err
@@ -77,7 +77,7 @@ func InitSchema(conn driver.Conn) error {
 	// User Audit Logs
 	query2 := `
 	CREATE TABLE IF NOT EXISTS user_audit_logs (
-		id UUID,
+		id UInt64,
 		user_id Nullable(UInt64),
 		cart_id Nullable(UInt64),
 		cart_uuid Nullable(String),
@@ -89,7 +89,7 @@ func InitSchema(conn driver.Conn) error {
 		ip_address Nullable(String),
 		created_at DateTime64(3, 'UTC')
 	) ENGINE = MergeTree()
-	ORDER BY (created_at, action)
+	ORDER BY (created_at, action, id)
 	`
 	if err := conn.Exec(ctx, query2); err != nil {
 		return err
@@ -98,7 +98,7 @@ func InitSchema(conn driver.Conn) error {
 	// Affiliate Clicks
 	query3 := `
 	CREATE TABLE IF NOT EXISTS affiliate_clicks (
-		id UUID,
+		id UInt64,
 		affiliate_id UInt64,
 		affiliate_discount_id Nullable(UInt64),
 		session_id String,
@@ -123,7 +123,7 @@ func InitSchema(conn driver.Conn) error {
 		commission_earned Float64,
 		created_at DateTime64(3, 'UTC')
 	) ENGINE = MergeTree()
-	ORDER BY created_at`
+	ORDER BY (created_at, id)`
 	if err := conn.Exec(ctx, query3); err != nil {
 		return err
 	}

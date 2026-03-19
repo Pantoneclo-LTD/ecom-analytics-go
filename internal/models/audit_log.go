@@ -3,11 +3,10 @@ package models
 import (
 	"encoding/json"
 	"time"
-	"github.com/google/uuid"
 )
 
 type SystemAuditLog struct {
-	ID           uuid.UUID       `json:"id" clickhouse:"id"`
+	ID           uint64          `json:"id" clickhouse:"id"`
 	UserID       uint64          `json:"userId" clickhouse:"user_id"`
 	Username     *string         `json:"username" clickhouse:"username"`
 	Email        string          `json:"email" clickhouse:"email"`
@@ -21,7 +20,7 @@ type SystemAuditLog struct {
 }
 
 type UserAuditLog struct {
-	ID           uuid.UUID       `json:"id" clickhouse:"id"`
+	ID           uint64          `json:"id" clickhouse:"id"`
 	UserID       *uint64         `json:"userId" clickhouse:"user_id"`
 	CartID       *uint64         `json:"cartId" clickhouse:"cart_id"`
 	CartUUID     *string         `json:"cartUuid" clickhouse:"cart_uuid"`
