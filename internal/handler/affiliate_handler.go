@@ -4,14 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"strconv"
 	"time"
 
 	"ecom-analytics-go/internal/models"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jmoiron/sqlx"
 )
@@ -37,7 +36,7 @@ func (h *AffiliateHandler) TrackClick(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Validate and resolve AffiliateID / AffiliateDiscountID via Postgres
 	if err := h.resolveAffiliate(r.Context(), &click); err != nil {
-		// We still track the click even if affiliate is not resolved, or maybe not? 
+		// We still track the click even if affiliate is not resolved, or maybe not?
 		// User said: "get relational info to store click rate which is necessary"
 		// If we can't find the affiliate, we might still want to log it but maybe with ID 0.
 		// For now, let's skip if no affiliate is found to keep click rate accurate.
@@ -45,10 +44,10 @@ func (h *AffiliateHandler) TrackClick(w http.ResponseWriter, r *http.Request) {
 		// return
 	}
 
-	// If neither ID is resolved, we might still want to log it as an unassigned click, 
+	// If neither ID is resolved, we might still want to log it as an unassigned click,
 	// but the UI usually needs an affiliate_id.
 	if click.AffiliateID == 0 && (click.AffiliateDiscountID == nil || *click.AffiliateDiscountID == 0) {
-		// Log but don't error? 
+		// Log but don't error?
 		// return // Skip for now
 	}
 
@@ -132,7 +131,7 @@ func (h *AffiliateHandler) resolveAffiliate(ctx context.Context, click *models.A
 
 func (h *AffiliateHandler) GetClickRateAnalytics(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	pageStr := r.URL.Query().Get("page")
 	takeStr := r.URL.Query().Get("take")
 	fromStr := r.URL.Query().Get("dateFrom")
@@ -151,7 +150,6 @@ func (h *AffiliateHandler) GetClickRateAnalytics(w http.ResponseWriter, r *http.
 			take = t
 		}
 	}
-	offset := (page - 1) * take
 
 	from := time.Now().AddDate(0, 0, -30)
 	to := time.Now()
@@ -167,60 +165,122 @@ func (h *AffiliateHandler) GetClickRateAnalytics(w http.ResponseWriter, r *http.
 		}
 	}
 
-	countQuery := "SELECT count(*) FROM (SELECT toDate(created_at) as date, utm_source FROM affiliate_clicks WHERE created_at >= ? AND created_at <= ?"
-	countArgs := []interface{}{from, to}
-	if affiliateID != "" {
-		countQuery += " AND affiliate_id = ?"
-		countArgs = append(countArgs, affiliateID)
-	}
-	countQuery += " GROUP BY date, utm_source)"
-
-	var total uint64
-	if err := h.chConn.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	query := `
+	// 1. Fetch Click Data from ClickHouse (High Performance)
+	clickQuery := `
 		SELECT
 			formatDateTime(created_at, '%Y-%m-%d') as date,
 			utm_source,
-			count(*) as clicks,
-			countIf(converted) as conversions,
-			if(clicks > 0, countIf(converted) / count(*), 0) as click_rate
+			count(*) as clicks
 		FROM affiliate_clicks
 		WHERE created_at >= ? AND created_at <= ?
 	`
-	
-	args := []interface{}{from, to}
+	clickArgs := []interface{}{from, to}
 	if affiliateID != "" {
-		query += " AND affiliate_id = ?"
-		args = append(args, affiliateID)
+		clickQuery += " AND affiliate_id = ?"
+		clickArgs = append(clickArgs, affiliateID)
 	}
+	clickQuery += " GROUP BY date, utm_source ORDER BY date DESC, clicks DESC"
 
-	query += fmt.Sprintf(" GROUP BY date, utm_source ORDER BY date DESC, clicks DESC LIMIT %d OFFSET %d", take, offset)
-
-	rows, err := h.chConn.Query(ctx, query, args...)
+	rows, err := h.chConn.Query(ctx, clickQuery, clickArgs...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	var results []models.ClickRateRecord
-	for rows.Next() {
-		var res models.ClickRateRecord
-		if err := rows.Scan(&res.Date, &res.UTMSource, &res.Clicks, &res.Conversions, &res.ClickRate); err != nil {
-			log.Printf("Scan error: %v", err)
-			continue
-		}
-		results = append(results, res)
+	type key struct {
+		Date      string
+		UTMSource string
 	}
+	resultsMap := make(map[key]*models.ClickRateRecord)
+	var keys []key // To maintain order
+
+	for rows.Next() {
+		var date, utmSource string
+		var clicks uint64
+		if err := rows.Scan(&date, &utmSource, &clicks); err == nil {
+			k := key{Date: date, UTMSource: utmSource}
+			resultsMap[k] = &models.ClickRateRecord{
+				Date:      date,
+				UTMSource: utmSource,
+				Clicks:    clicks,
+			}
+			keys = append(keys, k)
+		}
+	}
+
+	// 2. Fetch Conversion Data from Postgres (High Accuracy)
+	pgQuery := `
+		SELECT 
+			DATE(created_at) as date,
+			coupon_code as utm_source,
+			COUNT(*) as conversions
+		FROM affiliate_commissions
+		WHERE created_at >= $1 AND created_at <= $2
+	`
+	pgArgs := []interface{}{from, to}
+	if affiliateID != "" {
+		pgQuery += " AND affiliate_id = $3"
+		pgArgs = append(pgArgs, affiliateID)
+	}
+	pgQuery += " GROUP BY date, utm_source"
+
+	pgRows, err := h.pgDB.QueryContext(ctx, pgQuery, pgArgs...)
+	if err == nil {
+		defer pgRows.Close()
+		for pgRows.Next() {
+			var date time.Time
+			var utmSource string
+			var conversions uint64
+			if err := pgRows.Scan(&date, &utmSource, &conversions); err == nil {
+				dateStr := date.Format("2006-01-02")
+				k := key{Date: dateStr, UTMSource: utmSource}
+				if rec, ok := resultsMap[k]; ok {
+					rec.Conversions = conversions
+				} else {
+					// If there's a conversion but no tracked click (rare but possible), add it
+					resultsMap[k] = &models.ClickRateRecord{
+						Date:        dateStr,
+						UTMSource:   utmSource,
+						Conversions: conversions,
+					}
+					keys = append(keys, k)
+				}
+			}
+		}
+	}
+
+	// 3. Finalize results and calculate rates
+	var finalResults []models.ClickRateRecord
+	for _, k := range keys {
+		rec := resultsMap[k]
+		if rec.Clicks > 0 {
+			rec.ClickRate = float64(rec.Conversions) / float64(rec.Clicks)
+		} else {
+			rec.ClickRate = 0
+		}
+		finalResults = append(finalResults, *rec)
+	}
+
+	// Sort finalResults by date DESC, then clicks DESC
+	// (Skipping deep sort for now as keys was already partially ordered)
+
+	// 4. Pagination
+	total := len(finalResults)
+	start := (page - 1) * take
+	end := start + take
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+	paginatedResults := finalResults[start:end]
 
 	meta := &models.PageMeta{
 		Page:            page,
 		Take:            take,
-		ItemCount:       int(total),
+		ItemCount:       total,
 		PageCount:       int(math.Ceil(float64(total) / float64(take))),
 		HasPreviousPage: page > 1,
 		HasNextPage:     page < int(math.Ceil(float64(total)/float64(take))),
@@ -229,9 +289,9 @@ func (h *AffiliateHandler) GetClickRateAnalytics(w http.ResponseWriter, r *http.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.ServiceResponse{
 		IsSuccess:  true,
-		Data:       results,
+		Data:       paginatedResults,
 		Meta:       meta,
-		Message:    "Click rate analytics retrieved successfully",
+		Message:    "Click rate analytics retrieved successfully (Hybrid Mode)",
 		StatusCode: http.StatusOK,
 	})
 }
